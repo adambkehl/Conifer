@@ -3,6 +3,7 @@ name: Compile and Release Conifer
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: write  # needed to push tags and create releases
