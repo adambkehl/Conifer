@@ -1,0 +1,98 @@
+name: Compile and Release Conifer
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write  # needed to push tags and create releases
+
+jobs:
+  # ---------- Build Static Binary ----------
+  build-conifer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build static Conifer binary (Docker)
+        run: |
+          docker build -t conifer-static - <<'EOF'
+          FROM alpine:latest AS builder
+          RUN apk add --no-cache build-base musl-dev zlib-dev zlib-static
+          WORKDIR /src
+          COPY . .
+          RUN gcc -static -std=c99 -Wall -Wextra -O3 \
+              -D_POSIX_C_SOURCE=200809L \
+              -I third_party/uthash/src -I . \
+              src/utils.c src/kraken_stats.c src/kraken_taxo.c src/main.c \
+              -o conifer -lm -lz
+          FROM scratch
+          COPY --from=builder /src/conifer /conifer
+          ENTRYPOINT ["/conifer"]
+          EOF
+
+      - name: Extract binary
+        run: |
+          docker create --name conifer-tmp conifer-static
+          docker cp conifer-tmp:/conifer ./conifer
+          docker rm -f conifer-tmp
+          chmod +x ./conifer
+          ./conifer --help | head -n 20
+          docker rmi -f conifer-static || true
+          docker system prune -f || true
+
+      - name: Upload Conifer binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: conifer_Linux64
+          path: ./conifer
+
+  # ---------- Tag & Release ----------
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-conifer]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create tag
+        id: tag
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
+          TAG_NAME="build-$(date +'%Y.%m.%d.%H.%M.%S')"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
+
+      - name: Create Draft Release
+        id: release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          release_name: Conifer ${{ steps.tag.outputs.tag_name }}
+          draft: true
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: ./_dl
+          merge-multiple: true
+
+      - name: Upload binary to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.release.outputs.upload_url }}
+          asset_path: ./_dl/conifer
+          asset_name: conifer
+          asset_content_type: application/octet-stream
+
