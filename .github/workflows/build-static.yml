@@ -2,7 +2,7 @@ name: Compile and Release Conifer
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
   workflow_dispatch:
 
 permissions:
